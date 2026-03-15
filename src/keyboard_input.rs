@@ -5,7 +5,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crate::knob::Knob;
 
 pub fn handle_input(knob: &mut Knob) -> io::Result<bool> {
-    if event::poll(Duration::from_millis(100))? {
+    if event::poll(Duration::from_millis(16))? {
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match (key.code, key.modifiers) {
