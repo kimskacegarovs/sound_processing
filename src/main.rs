@@ -1,10 +1,11 @@
 mod knob;
+mod keyboard_input;
 
 use knob::Knob;
+use keyboard_input::handle_input;
 
-use std::{io, time::Duration};
+use std::{io};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Direction, Layout},
@@ -41,24 +42,6 @@ fn draw_ui(frame: &mut Frame, knob: &Knob) {
     frame.render_widget(paragraph, areas[1]);
 }
 
-fn handle_input(knob: &mut Knob) -> io::Result<bool> {
-    if event::poll(Duration::from_millis(100))? {
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                match (key.code, key.modifiers) {
-                    (KeyCode::Char('q'), _) => return Ok(false),
-                    (KeyCode::Left, KeyModifiers::CONTROL) => knob.decrease_by(10),
-                    (KeyCode::Right, KeyModifiers::CONTROL) => knob.increase_by(10),
-                    (KeyCode::Left, _) => knob.decrease(),
-                    (KeyCode::Right, _) => knob.increase(),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    Ok(true)
-}
 
 fn run(mut terminal: DefaultTerminal) -> io::Result<()> {
     let mut knob = Knob::new("TEST KNOB", 0);
