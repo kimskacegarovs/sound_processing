@@ -4,32 +4,41 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
+use crate::knob::Knob;
 
 pub struct AudioMonitor {
     rms_bits: Arc<AtomicU32>,
+    gain_bits: Arc<AtomicU32>,
     status: String,
     active: bool,
     _stream: Option<Stream>,
 }
 
 impl AudioMonitor {
-    pub fn start_default_input() -> Self {
+    pub fn start_default_input(gain_knob: &Knob) -> Self {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
+        let gain_bits = Arc::new(AtomicU32::new(gain_knob.value as u32));
 
-        match try_start_default_input(rms_bits.clone()) {
+        match try_start_default_input(rms_bits.clone(), gain_bits.clone()) {
             Ok((stream, status)) => Self {
                 rms_bits,
+                gain_bits,
                 status,
                 active: true,
                 _stream: Some(stream),
             },
             Err(error) => Self {
                 rms_bits,
+                gain_bits,
                 status: error.to_string(),
                 active: false,
                 _stream: None,
             },
         }
+    }
+
+    pub fn set_gain_from_knob(&self, knob: &Knob) {
+        self.gain_bits.store(knob.value as u32, Ordering::Relaxed);
     }
 
     pub fn rms(&self) -> f32 {
@@ -49,7 +58,10 @@ impl AudioMonitor {
     }
 }
 
-fn try_start_default_input(rms_bits: Arc<AtomicU32>) -> io::Result<(Stream, String)> {
+fn try_start_default_input(
+    rms_bits: Arc<AtomicU32>,
+    gain_bits: Arc<AtomicU32>,
+) -> io::Result<(Stream, String)> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -106,13 +118,13 @@ fn build_input_stream<T, F>(
 ) -> Result<Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample + Copy + Send + 'static,
-    F: Fn(T) -> f32 + Send + Copy + 'static,
+    F: Fn(T) -> f32 + Send + 'static,
 {
     let channels = usize::from(config.channels.max(1));
 
     device.build_input_stream(
         config,
-        move |data: &[T], _| update_rms(data, channels, &rms_bits, convert_sample),
+        move |data: &[T], _| update_rms(data, channels, &rms_bits, &convert_sample),
         |error| eprintln!("Audio input stream error: {error}"),
         None,
     )
@@ -122,10 +134,10 @@ fn update_rms<T, F>(
     data: &[T],
     channels: usize,
     rms_bits: &Arc<AtomicU32>,
-    convert_sample: F,
+    convert_sample: &F,
 ) where
     T: Copy,
-    F: Fn(T) -> f32 + Copy,
+    F: Fn(T) -> f32,
 {
     if data.is_empty() {
         return;
@@ -174,7 +186,7 @@ mod tests {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let data = [1.0f32, -1.0, 1.0, -1.0];
 
-        update_rms(&data, 1, &rms_bits, |sample| sample);
+        update_rms(&data, 1, &rms_bits, &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 1.0).abs() < 1.0e-6);
@@ -185,7 +197,7 @@ mod tests {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let stereo_data = [1.0f32, 0.0, 1.0, 0.0];
 
-        update_rms(&stereo_data, 2, &rms_bits, |sample| sample);
+        update_rms(&stereo_data, 2, &rms_bits, &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 0.5).abs() < 1.0e-6);
@@ -196,7 +208,7 @@ mod tests {
         let rms_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let silent_data = [0.0f32; 8];
 
-        update_rms(&silent_data, 1, &rms_bits, |sample| sample);
+        update_rms(&silent_data, 1, &rms_bits, &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 0.9).abs() < 1.0e-6);

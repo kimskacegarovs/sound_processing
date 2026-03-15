@@ -18,13 +18,14 @@ fn main() -> io::Result<()> {
 
 fn run() -> io::Result<()> {
     let mut gain_knob = Knob::new("Gain", 0);
-    let audio_monitor = AudioMonitor::start_default_input();
+    let audio_monitor = AudioMonitor::start_default_input(&gain_knob);
     let mut terminal = ratatui::init();
 
     loop {
         terminal.draw(|frame| draw_ui(frame, &gain_knob, &audio_monitor))?;
 
         if !handle_input(&mut gain_knob)? {
+            audio_monitor.set_gain_from_knob(&gain_knob);
             break;
         }
     }
