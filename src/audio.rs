@@ -107,21 +107,6 @@ fn build_stream_for_format(
             rms_bits,
             |sample| sample,
         ),
-
-        SampleFormat::I16 => build_input_stream::<i16, _>(
-            device,
-            config,
-            rms_bits,
-            |sample| sample as f32 / i16::MAX as f32,
-        ),
-
-        SampleFormat::U16 => build_input_stream::<u16, _>(
-            device,
-            config,
-            rms_bits,
-            |sample| (sample as f32 / u16::MAX as f32) * 2.0 - 1.0,
-        ),
-
         _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
     }
 }
