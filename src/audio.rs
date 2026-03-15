@@ -19,7 +19,7 @@ impl AudioMonitor {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let gain_bits = Arc::new(AtomicU32::new(gain_knob.value as u32));
 
-        match try_start_default_input(rms_bits.clone()) {
+        match try_start_default_input(rms_bits.clone(), gain_bits.clone()) {
             Ok((stream, status)) => Self {
                 rms_bits,
                 gain_bits,
@@ -64,6 +64,7 @@ impl AudioMonitor {
 
 fn try_start_default_input(
     rms_bits: Arc<AtomicU32>,
+    gain_bits: Arc<AtomicU32>,
 ) -> io::Result<(Stream, String)> {
     let host = cpal::default_host();
     let device = host
@@ -83,6 +84,7 @@ fn try_start_default_input(
         &stream_config,
         sample_format,
         rms_bits,
+        gain_bits,
     ).map_err(io::Error::other)?;
 
     stream.play().map_err(io::Error::other)?;
@@ -102,12 +104,14 @@ fn build_stream_for_format(
     config: &cpal::StreamConfig,
     sample_format: SampleFormat,
     rms_bits: Arc<AtomicU32>,
+    gain_bits: Arc<AtomicU32>,
 ) -> Result<Stream, cpal::BuildStreamError> {
     match sample_format {
         SampleFormat::F32 => build_input_stream::<f32, _>(
             device,
             config,
             rms_bits,
+            gain_bits,
             |sample| sample,
         ),
         _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
@@ -118,6 +122,7 @@ fn build_input_stream<T, F>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     rms_bits: Arc<AtomicU32>,
+    gain_bits: Arc<AtomicU32>,
     convert_sample: F,
 ) -> Result<Stream, cpal::BuildStreamError>
 where
@@ -128,7 +133,7 @@ where
 
     device.build_input_stream(
         config,
-        move |data: &[T], _| update_rms(data, channels, &rms_bits, &convert_sample),
+        move |data: &[T], _| update_rms(data, channels, &rms_bits, &gain_bits, &convert_sample),
         |error| eprintln!("Audio input stream error: {error}"),
         None,
     )
@@ -138,6 +143,7 @@ fn update_rms<T, F>(
     data: &[T],
     channels: usize,
     rms_bits: &Arc<AtomicU32>,
+    gain_bits: &Arc<AtomicU32>,
     convert_sample: &F,
 ) where
     T: Copy,
@@ -146,6 +152,9 @@ fn update_rms<T, F>(
     if data.is_empty() {
         return;
     }
+
+    // Knob range 0–100; 50 = unity gain (×1.0), 100 = ×2.0, 0 = silence
+    let gain = gain_bits.load(Ordering::Relaxed) as f32 / 50.0;
 
     let mut sum_squares = 0.0f32;
     let mut frame_count = 0usize;
@@ -162,7 +171,8 @@ fn update_rms<T, F>(
             .sum::<f32>()
             / frame.len() as f32;
 
-        sum_squares += mono_sample * mono_sample;
+        let gained = (mono_sample * gain).clamp(-1.0, 1.0);
+        sum_squares += gained * gained;
         frame_count += 1;
     }
 
@@ -185,12 +195,16 @@ fn update_rms<T, F>(
 mod tests {
     use super::*;
 
+    fn unity_gain() -> Arc<AtomicU32> {
+        Arc::new(AtomicU32::new(50)) // knob value 50 → ×1.0
+    }
+
     #[test]
     fn calculates_rms_for_mono_input() {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let data = [1.0f32, -1.0, 1.0, -1.0];
 
-        update_rms(&data, 1, &rms_bits, &|sample| sample);
+        update_rms(&data, 1, &rms_bits, &unity_gain(), &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 1.0).abs() < 1.0e-6);
@@ -201,7 +215,7 @@ mod tests {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let stereo_data = [1.0f32, 0.0, 1.0, 0.0];
 
-        update_rms(&stereo_data, 2, &rms_bits, &|sample| sample);
+        update_rms(&stereo_data, 2, &rms_bits, &unity_gain(), &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 0.5).abs() < 1.0e-6);
@@ -212,11 +226,27 @@ mod tests {
         let rms_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let silent_data = [0.0f32; 8];
 
-        update_rms(&silent_data, 1, &rms_bits, &|sample| sample);
+        update_rms(&silent_data, 1, &rms_bits, &unity_gain(), &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 0.9).abs() < 1.0e-6);
     }
+
+    #[test]
+    fn gain_scales_rms() {
+        let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
+        // 0.5 amplitude sine at unity (50) → RMS = 0.5
+        let data = [0.5f32, -0.5, 0.5, -0.5];
+        update_rms(&data, 1, &rms_bits, &unity_gain(), &|s| s);
+        let rms_unity = f32::from_bits(rms_bits.load(Ordering::Relaxed));
+
+        // Double gain (100) → RMS should be 1.0 (clamped)
+        let rms_bits2 = Arc::new(AtomicU32::new(0.0f32.to_bits()));
+        let double_gain = Arc::new(AtomicU32::new(100));
+        update_rms(&data, 1, &rms_bits2, &double_gain, &|s| s);
+        let rms_double = f32::from_bits(rms_bits2.load(Ordering::Relaxed));
+
+        assert!((rms_unity - 0.5).abs() < 1.0e-6);
+        assert!((rms_double - 1.0).abs() < 1.0e-6);
+    }
 }
-
-
