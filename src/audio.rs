@@ -19,7 +19,7 @@ impl AudioMonitor {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let gain_bits = Arc::new(AtomicU32::new(gain_knob.value as u32));
 
-        match try_start_default_input(rms_bits.clone(), gain_bits.clone()) {
+        match try_start_default_input(rms_bits.clone()) {
             Ok((stream, status)) => Self {
                 rms_bits,
                 gain_bits,
@@ -45,6 +45,10 @@ impl AudioMonitor {
         f32::from_bits(self.rms_bits.load(Ordering::Relaxed)).clamp(0.0, 1.0)
     }
 
+    pub fn gain(&self) -> u32 {
+        self.gain_bits.load(Ordering::Relaxed)
+    }
+
     pub fn dbfs(&self) -> f32 {
         20.0 * self.rms().max(1.0e-6).log10()
     }
@@ -60,7 +64,6 @@ impl AudioMonitor {
 
 fn try_start_default_input(
     rms_bits: Arc<AtomicU32>,
-    gain_bits: Arc<AtomicU32>,
 ) -> io::Result<(Stream, String)> {
     let host = cpal::default_host();
     let device = host
@@ -85,11 +88,10 @@ fn try_start_default_input(
     stream.play().map_err(io::Error::other)?;
 
     let status = format!(
-        "Listening on {device_name} ({} ch @ {} Hz, {:?}) || Gain bits: {}",
+        "Listening on {device_name} ({} ch @ {} Hz, {:?})",
         stream_config.channels,
         stream_config.sample_rate.0,
         sample_format,
-        gain_bits.load(Ordering::Relaxed),
     );
 
     Ok((stream, status))

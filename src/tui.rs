@@ -20,6 +20,7 @@ pub fn draw_ui(frame: &mut Frame, knob: &Knob, audio_monitor: &AudioMonitor) {
                 .borders(Borders::ALL)
                 .title(knob.name.as_str()),
         )
+        .label(format!("{}%", knob.value))
         .percent(knob.value as u16);
 
     frame.render_widget(gauge, areas[0]);
@@ -33,8 +34,10 @@ pub fn draw_ui(frame: &mut Frame, knob: &Knob, audio_monitor: &AudioMonitor) {
 
     let audio_text = if audio_monitor.is_active() {
         format!(
-            "{} ({:.1} dBFS)",
+            "{} | Gain: {} | RMS {:.3} ({:.1} dBFS)",
             audio_monitor.status(),
+            audio_monitor.gain(),
+            input_rms,
             audio_monitor.dbfs()
         )
     } else {
