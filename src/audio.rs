@@ -85,10 +85,11 @@ fn try_start_default_input(
     stream.play().map_err(io::Error::other)?;
 
     let status = format!(
-        "Listening on {device_name} ({} ch @ {} Hz, {:?})",
+        "Listening on {device_name} ({} ch @ {} Hz, {:?}) || Gain bits: {}",
         stream_config.channels,
         stream_config.sample_rate.0,
         sample_format,
+        gain_bits.load(Ordering::Relaxed),
     );
 
     Ok((stream, status))
