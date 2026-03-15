@@ -17,14 +17,14 @@ fn main() -> io::Result<()> {
 }
 
 fn run() -> io::Result<()> {
-    let mut knob = Knob::new("TEST KNOB", 0);
+    let mut gain_knob = Knob::new("Gain", 0);
     let audio_monitor = AudioMonitor::start_default_input();
     let mut terminal = ratatui::init();
 
     loop {
-        terminal.draw(|frame| draw_ui(frame, &knob, &audio_monitor))?;
+        terminal.draw(|frame| draw_ui(frame, &gain_knob, &audio_monitor))?;
 
-        if !handle_input(&mut knob)? {
+        if !handle_input(&mut gain_knob)? {
             break;
         }
     }

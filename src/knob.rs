@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 pub struct Knob {
     pub name: String,
     pub value: i32,
@@ -29,5 +32,20 @@ impl Knob {
 
     pub fn decrease_by(&mut self, by: i32) {
         self.value = (self.value - by).max(MIN);
+    }
+
+    pub fn get_multiplier(&self) -> f32 {
+        self.value as f32 / 100.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_multiplier() {
+        let knob = Knob::new("test", 10);
+        assert_eq!(knob.get_multiplier(), 0.1);
     }
 }
