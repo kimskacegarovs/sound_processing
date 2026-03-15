@@ -2,6 +2,7 @@ mod audio;
 mod keyboard_input;
 mod knob;
 mod tui;
+mod pitch;
 
 use audio::AudioMonitor;
 use keyboard_input::handle_input;

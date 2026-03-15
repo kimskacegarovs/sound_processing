@@ -1,14 +1,16 @@
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use crate::knob::Knob;
+use crate::pitch::PitchInfo;
 
 pub struct AudioMonitor {
     rms_bits: Arc<AtomicU32>,
     gain_bits: Arc<AtomicU32>,
+    pitch_info: Arc<Mutex<Option<PitchInfo>>>,
     status: String,
     active: bool,
     _stream: Option<Stream>,
@@ -18,11 +20,13 @@ impl AudioMonitor {
     pub fn start_default_input(gain_knob: &Knob) -> Self {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let gain_bits = Arc::new(AtomicU32::new(gain_knob.value as u32));
+        let pitch_info = Arc::new(Mutex::new(None));
 
-        match try_start_default_input(rms_bits.clone(), gain_bits.clone()) {
+        match try_start_default_input(rms_bits.clone(), gain_bits.clone(), pitch_info.clone()) {
             Ok((stream, status)) => Self {
                 rms_bits,
                 gain_bits,
+                pitch_info,
                 status,
                 active: true,
                 _stream: Some(stream),
@@ -30,11 +34,16 @@ impl AudioMonitor {
             Err(error) => Self {
                 rms_bits,
                 gain_bits,
+                pitch_info,
                 status: error.to_string(),
                 active: false,
                 _stream: None,
             },
         }
+    }
+
+    pub fn pitch_info(&self) -> Option<PitchInfo> {
+        self.pitch_info.lock().ok()?.clone()
     }
 
     pub fn set_gain_from_knob(&self, knob: &Knob) {
@@ -65,6 +74,7 @@ impl AudioMonitor {
 fn try_start_default_input(
     rms_bits: Arc<AtomicU32>,
     gain_bits: Arc<AtomicU32>,
+    pitch_info: Arc<Mutex<Option<PitchInfo>>>,
 ) -> io::Result<(Stream, String)> {
     let host = cpal::default_host();
     let device = host
@@ -85,6 +95,7 @@ fn try_start_default_input(
         sample_format,
         rms_bits,
         gain_bits,
+        pitch_info,
     ).map_err(io::Error::other)?;
 
     stream.play().map_err(io::Error::other)?;
@@ -105,6 +116,7 @@ fn build_stream_for_format(
     sample_format: SampleFormat,
     rms_bits: Arc<AtomicU32>,
     gain_bits: Arc<AtomicU32>,
+    pitch_info: Arc<Mutex<Option<PitchInfo>>>,
 ) -> Result<Stream, cpal::BuildStreamError> {
     match sample_format {
         SampleFormat::F32 => build_input_stream::<f32, _>(
@@ -112,6 +124,7 @@ fn build_stream_for_format(
             config,
             rms_bits,
             gain_bits,
+            pitch_info,
             |sample| sample,
         ),
         _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
@@ -123,6 +136,7 @@ fn build_input_stream<T, F>(
     config: &cpal::StreamConfig,
     rms_bits: Arc<AtomicU32>,
     gain_bits: Arc<AtomicU32>,
+    pitch_info: Arc<Mutex<Option<PitchInfo>>>,
     convert_sample: F,
 ) -> Result<Stream, cpal::BuildStreamError>
 where
@@ -133,17 +147,18 @@ where
 
     device.build_input_stream(
         config,
-        move |data: &[T], _| update_rms(data, channels, &rms_bits, &gain_bits, &convert_sample),
+        move |data: &[T], _| update_audio_state(data, channels, &rms_bits, &gain_bits, &pitch_info, &convert_sample,),
         |error| eprintln!("Audio input stream error: {error}"),
         None,
     )
 }
 
-fn update_rms<T, F>(
+fn update_audio_state<T, F>(
     data: &[T],
     channels: usize,
     rms_bits: &Arc<AtomicU32>,
     gain_bits: &Arc<AtomicU32>,
+    pitch_info: &Arc<Mutex<Option<PitchInfo>>>,
     convert_sample: &F,
 ) where
     T: Copy,
@@ -156,6 +171,7 @@ fn update_rms<T, F>(
     let knob = gain_bits.load(Ordering::Relaxed) as f32;
     let gain = 20f32.powf((knob - 50.0) / 50.0); // 0 = 0.05x ... 50 = 1x ... 100 = 20x
 
+    let mut mono_buffer: Vec<f32> = Vec::with_capacity(data.len() / channels.max(1));
     let mut sum_squares = 0.0f32;
     let mut frame_count = 0usize;
 
@@ -172,6 +188,8 @@ fn update_rms<T, F>(
             / frame.len() as f32;
 
         let gained = (mono_sample * gain).clamp(-1.0, 1.0);
+
+        mono_buffer.push(gained);
         sum_squares += gained * gained;
         frame_count += 1;
     }
@@ -203,8 +221,9 @@ mod tests {
     fn calculates_rms_for_mono_input() {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let data = [1.0f32, -1.0, 1.0, -1.0];
+        let pitch_info = Arc::new(Mutex::new(None));
 
-        update_rms(&data, 1, &rms_bits, &unity_gain(), &|sample| sample);
+        update_audio_state(&data, 1, &rms_bits, &unity_gain(), &pitch_info, &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 1.0).abs() < 1.0e-6);
@@ -214,8 +233,9 @@ mod tests {
     fn mixes_channels_before_calculating_rms() {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let stereo_data = [1.0f32, 0.0, 1.0, 0.0];
+        let pitch_info = Arc::new(Mutex::new(None));
 
-        update_rms(&stereo_data, 2, &rms_bits, &unity_gain(), &|sample| sample);
+        update_audio_state(&stereo_data, 2, &rms_bits, &unity_gain(), &pitch_info, &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 0.5).abs() < 1.0e-6);
@@ -225,8 +245,9 @@ mod tests {
     fn applies_smoothing_when_signal_drops() {
         let rms_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let silent_data = [0.0f32; 8];
+        let pitch_info = Arc::new(Mutex::new(None));
 
-        update_rms(&silent_data, 1, &rms_bits, &unity_gain(), &|sample| sample);
+        update_audio_state(&silent_data, 1, &rms_bits, &unity_gain(), &pitch_info, &|sample| sample);
 
         let rms = f32::from_bits(rms_bits.load(Ordering::Relaxed));
         assert!((rms - 0.9).abs() < 1.0e-6);
@@ -237,13 +258,15 @@ mod tests {
         let rms_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         // 0.5 amplitude sine at unity (50) → RMS = 0.5
         let data = [0.5f32, -0.5, 0.5, -0.5];
-        update_rms(&data, 1, &rms_bits, &unity_gain(), &|s| s);
+        let pitch_info = Arc::new(Mutex::new(None));
+
+        update_audio_state(&data, 1, &rms_bits, &unity_gain(), &pitch_info, &|s| s);
         let rms_unity = f32::from_bits(rms_bits.load(Ordering::Relaxed));
 
         // Double gain (100) → RMS should be 1.0 (clamped)
         let rms_bits2 = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let double_gain = Arc::new(AtomicU32::new(100));
-        update_rms(&data, 1, &rms_bits2, &double_gain, &|s| s);
+        update_audio_state(&data, 1, &rms_bits2, &double_gain, &pitch_info, &|s| s);
         let rms_double = f32::from_bits(rms_bits2.load(Ordering::Relaxed));
 
         assert!((rms_unity - 0.5).abs() < 1.0e-6);
