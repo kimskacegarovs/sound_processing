@@ -153,8 +153,8 @@ fn update_rms<T, F>(
         return;
     }
 
-    // Knob range 0–100; 50 = unity gain (×1.0), 100 = ×2.0, 0 = silence
-    let gain = gain_bits.load(Ordering::Relaxed) as f32 / 50.0;
+    let knob = gain_bits.load(Ordering::Relaxed) as f32;
+    let gain = 20f32.powf((knob - 50.0) / 50.0); // 0 = 0.05x ... 50 = 1x ... 100 = 20x
 
     let mut sum_squares = 0.0f32;
     let mut frame_count = 0usize;
