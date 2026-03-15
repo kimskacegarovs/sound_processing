@@ -8,9 +8,10 @@ pub fn draw_ui(frame: &mut Frame, knob: &Knob, audio_monitor: &AudioMonitor) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(3),
+            Constraint::Length(3), // gain
+            Constraint::Length(3), // rms
+            Constraint::Length(3), // pitch
+            Constraint::Min(3), // overview
         ])
         .split(frame.area());
 
@@ -32,20 +33,34 @@ pub fn draw_ui(frame: &mut Frame, knob: &Knob, audio_monitor: &AudioMonitor) {
 
     frame.render_widget(input_gauge, areas[1]);
 
+    let pitch_text = match audio_monitor.pitch_info() {
+        Some(p) => format!(
+            "Note: {} | Frequency: {:.1} Hz | Detune: {:+.1} cents",
+            p.note, p.frequency_hz, p.cents_off
+        ),
+        None => "Note: --\nFrequency: --\nDetune: --".to_string(),
+    };
+
+    let pitch_panel =
+        Paragraph::new(pitch_text).block(Block::default().title("Pitch").borders(Borders::ALL));
+
+    frame.render_widget(pitch_panel, areas[2]);
+
+
     let audio_text = if audio_monitor.is_active() {
         format!(
             "{} | Gain: {} | RMS {:.3} ({:.1} dBFS)",
             audio_monitor.status(),
             audio_monitor.gain(),
             input_rms,
-            audio_monitor.dbfs()
+            audio_monitor.dbfs(),
         )
     } else {
         format!("Audio input unavailable | {}", audio_monitor.status())
     };
 
-    let paragraph =
+    let overview =
         Paragraph::new(audio_text).block(Block::default().title("Overview").borders(Borders::ALL));
 
-    frame.render_widget(paragraph, areas[2]);
+    frame.render_widget(overview, areas[3]);
 }
