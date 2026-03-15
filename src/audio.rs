@@ -75,28 +75,12 @@ fn try_start_default_input(
     let sample_format = supported_config.sample_format();
     let stream_config: cpal::StreamConfig = supported_config.into();
 
-    let stream = match sample_format {
-        SampleFormat::F32 => build_input_stream::<f32, _>(
-            &device,
-            &stream_config,
-            rms_bits,
-            |sample| sample,
-        ),
-        SampleFormat::I16 => build_input_stream::<i16, _>(
-            &device,
-            &stream_config,
-            rms_bits,
-            |sample| sample as f32 / i16::MAX as f32,
-        ),
-        SampleFormat::U16 => build_input_stream::<u16, _>(
-            &device,
-            &stream_config,
-            rms_bits,
-            |sample| (sample as f32 / u16::MAX as f32) * 2.0 - 1.0,
-        ),
-        _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
-    }
-    .map_err(io::Error::other)?;
+    let stream = build_stream_for_format(
+        &device,
+        &stream_config,
+        sample_format,
+        rms_bits,
+    ).map_err(io::Error::other)?;
 
     stream.play().map_err(io::Error::other)?;
 
@@ -108,6 +92,38 @@ fn try_start_default_input(
     );
 
     Ok((stream, status))
+}
+
+fn build_stream_for_format(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_format: SampleFormat,
+    rms_bits: Arc<AtomicU32>,
+) -> Result<Stream, cpal::BuildStreamError> {
+    match sample_format {
+        SampleFormat::F32 => build_input_stream::<f32, _>(
+            device,
+            config,
+            rms_bits,
+            |sample| sample,
+        ),
+
+        SampleFormat::I16 => build_input_stream::<i16, _>(
+            device,
+            config,
+            rms_bits,
+            |sample| sample as f32 / i16::MAX as f32,
+        ),
+
+        SampleFormat::U16 => build_input_stream::<u16, _>(
+            device,
+            config,
+            rms_bits,
+            |sample| (sample as f32 / u16::MAX as f32) * 2.0 - 1.0,
+        ),
+
+        _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
+    }
 }
 
 fn build_input_stream<T, F>(
